@@ -1,4 +1,5 @@
-#if !defined(THORDUR_COMMON_H)
+#pragma once
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -10,6 +11,8 @@
 #if !defined(assert)
 #include <assert.h>
 #endif
+
+#define debug_assert(e)
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -23,8 +26,6 @@ typedef int64_t s64;
 
 typedef float f32;
 typedef double f64;
-
-typedef const char cstring;
 
 #define U8_MAX UINT8_MAX
 #define U16_MAX UINT16_MAX
@@ -91,7 +92,7 @@ s32 isWhitespace(char c) {
 	return (c == ' ' || c == '\t' || c == '\n' || c == '\r');
 }
 
-s64 stringParseInt(cstring *str) {
+s64 stringParseInt(const char *str) {
 	s64 n = 0;
 	s32 is_neg = 0;
 
@@ -124,7 +125,6 @@ s64 fileParseInt(FILE *stream) {
 
 		if(first_char && c == '-') {
 			is_neg = 1;
-			first_char = 0;
 		}else if(c >= '0' && c <= '9') {
 			n *= 10;
 			n += c - '0';
@@ -132,6 +132,8 @@ s64 fileParseInt(FILE *stream) {
 			ungetc(c, stream);
 			break;
 		}
+
+		first_char = 0;
 	}
 
 	if(is_neg) n = -n;
@@ -139,7 +141,7 @@ s64 fileParseInt(FILE *stream) {
 	return n;
 }
 
-s32 fileReadToken(FILE *stream, char *buffer, cstring *sep, u64 *length_out) {
+s32 fileReadToken(FILE *stream, char *buffer, const char *sep, u64 *length_out) {
 	char *start = buffer;
 	s32 end_not_reached = 1;
 
@@ -165,28 +167,28 @@ done:
 	return end_not_reached;
 }
 
-u32 sdbmHashBytes32(u32 n) {
-	u32 hash = 0;
-
-	hash = (n & 0xFF) + (hash << 6) + (hash << 16) - hash;
-	hash = (n & 0xFF00) + (hash << 6) + (hash << 16) - hash;
-	hash = (n & 0xFF0000) + (hash << 6) + (hash << 16) - hash;
-	hash = (n & 0xFF000000) + (hash << 6) + (hash << 16) - hash;
-
-	return hash;
-}
-
-u64 sdbmHashBytes(const char *data, size_t size) {
+u64 sdbmHashBytes(const void *data, size_t size) {
+	const char *ptr = (const char *)data;
 	u64 hash = 0;
 
 	for(s32 i = 0; i < size; i++) {
-		hash = data[i] + (hash << 6) + (hash << 16) - hash;
+		hash = ptr[i] + (hash << 6) + (hash << 16) - hash;
 	}
 
 	return hash;
 }
 
-u64 sdbmHashStr(cstring *str) {
+u64 sdbmHashInt(u64 n) {
+	u64 hash = 0;
+
+	hash = (n & 0xFFFFFFFF00000000) + (hash << 6) + (hash << 16) - hash;
+	hash = (n & 0x00000000FFFFFFFF) + (hash << 6) + (hash << 16) - hash;
+
+	return hash;
+}
+
+//ætli það sé þörf á því að cast-a c yfir í u64?
+u64 sdbmHashStr(const char *str) {
 	u64 hash = 0;
 	u8 c;
 
@@ -236,6 +238,7 @@ void *bufferGrow(void *buffer, size_t increment, size_t element_size) {
 }
 
 #ifdef __cplusplus
+//virkar fyrir GCC og Clang
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wc++11-extensions"
 
@@ -281,26 +284,42 @@ template <typename T, size_t N> void listerRemove(lister<T, N> *a, size_t i) {
 }
 
 //hash table
+#define DICT_KEY_NONE 0
+#define DICT_KEY_DELETED 1
 template<typename K, typename V, size_t size> struct dict {
 	u64 key_hashes[size] = {};
 	V values[size] = {};
-	const bool stringMode = false;
-};
-
-template<typename V, size_t size> struct dict<cstring *, V, size> {
-	u64 key_hashes[size] = {};
-	V values[size] = {};
-	const bool stringMode = true;
 };
 
 #define dictCap(d) (arrayLength((d)->key_hashes))
-#define dictHash(k, mode) ((mode) ? sdbmHashStr((k)) : sdbmHashBytes((const char *)&(k), sizeof((key))))
+template <typename K, typename V, size_t size> u64 dictHash(dict<K, V, size> *d, K key) {
+	u64 result = 0;
+
+	result = sdbmHashBytes(&key, sizeof(key));
+
+	if(result <= DICT_KEY_DELETED) {
+		result = DICT_KEY_DELETED + result + 1;
+	}
+
+	return result;
+}
+
+template <typename V, size_t size> u64 dictHash(dict<const char *, V, size>, char *key) {
+	u64 result = 0;
+
+	result = sdbmHashStr((const char *)key);
+
+	if(result <= DICT_KEY_DELETED) {
+		result = DICT_KEY_DELETED + result + 1;
+	}
+
+	return result;
+}
+
 template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, K key, V value, bool redef = false) {
-	u64 hash = dictHash(key, d->stringMode);
+	u64 hash = dictHash(d, key);
 	size_t capacity = dictCap(d);
 	size_t index = hash % capacity;
-
-	if(hash < 1) hash++;
 
 	size_t i;
 	for(i = 0; i < capacity; i++) {
@@ -322,22 +341,24 @@ template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, 
 	assert(i != capacity);
 }
 
-template<typename V, size_t size> void dictAdd(dict<cstring *, V, size> *d, char *key, V value, bool redef = false) {
-	dictAdd(d, (cstring *)key, value, redef);
+template<typename V, size_t size> void dictAdd(dict<const char *, V, size> *d, char *key, V value, bool redef = false) {
+	dictAdd(d, (const char *)key, value, redef);
 }
 
 
 template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K key) {
 	V *result = NULL;
 
-	u64 hash = dictHash(key, d->stringMode);
+	u64 hash = dictHash(d, key);
 	size_t capacity = dictCap(d);
 	size_t index = hash % capacity;
 
-	if(hash < 1) hash++;
-
 	for(size_t i = 0; i < capacity; i++) {
 		u64 key_hash = d->key_hashes[index];
+
+		if(key_hash == DICT_KEY_NONE) {
+			break;
+		}
 
 		if(hash == key_hash) {
 			result = d->values + index;
@@ -351,27 +372,26 @@ template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K 
 	return result;
 }
 
-template<typename V, size_t size> V *dictGet(dict<cstring *, V, size> *d, char *key) {
-	return dictGet(d, (cstring *)key);
+template<typename V, size_t size> V *dictGet(dict<const char *, V, size> *d, char *key) {
+	return dictGet(d, (const char *)key);
 }
 
 
 template<typename K, typename V, size_t size> V dictRemove(dict<K, V, size> *d, K key) {
-	V *result = dictGet(d, key);
-	assert(result);
+	V *result_ptr = dictGet(d, key);
+	assert(result_ptr);
+	V result = *result_ptr;
 
-	size_t index = (size_t)(result - d->values);
-	d->key_hashes[index] = 0;
+	size_t index = (size_t)(result_ptr - d->values);
+	d->key_hashes[index] = DICT_KEY_DELETED;
 	d->values[index] = (V){0};
 
-	return *result;
+	return result;
 }
 
-template<typename V, size_t size> V dictRemove(dict<cstring *, V, size> *d, char *key) {
-	return dictRemove(d, (cstring *)key);
+template<typename V, size_t size> V dictRemove(dict<const char *, V, size> *d, char *key) {
+	return dictRemove(d, (const char *)key);
 }
 
 #pragma GCC diagnostic pop
-#endif
-#define THORDUR_COMMON_H
 #endif
