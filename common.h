@@ -12,8 +12,6 @@
 #include <assert.h>
 #endif
 
-#define debug_assert(e)
-
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -187,7 +185,6 @@ u64 sdbmHashInt(u64 n) {
 	return hash;
 }
 
-//ætli það sé þörf á því að cast-a c yfir í u64?
 u64 sdbmHashStr(const char *str) {
 	u64 hash = 0;
 	u8 c;
