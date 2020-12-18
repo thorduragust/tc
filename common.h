@@ -289,7 +289,8 @@ template<typename K, typename V, size_t size> struct dict {
 };
 
 #define dictCap(d) (arrayLength((d)->key_hashes))
-template <typename K, typename V, size_t size> u64 dictHash(dict<K, V, size> *d, K key) {
+
+template <typename K> u64 dictHash(K key) {
 	u64 result = 0;
 
 	result = sdbmHashBytes(&key, sizeof(key));
@@ -301,7 +302,7 @@ template <typename K, typename V, size_t size> u64 dictHash(dict<K, V, size> *d,
 	return result;
 }
 
-template <typename V, size_t size> u64 dictHash(dict<const char *, V, size>, char *key) {
+u64 dictHash(char *key) {
 	u64 result = 0;
 
 	result = sdbmHashStr((const char *)key);
@@ -314,18 +315,19 @@ template <typename V, size_t size> u64 dictHash(dict<const char *, V, size>, cha
 }
 
 template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, K key, V value, bool redef = false) {
-	u64 hash = dictHash(d, key);
+	u64 hash = dictHash(key);
 	size_t capacity = dictCap(d);
 	size_t index = hash % capacity;
 
 	size_t i;
 	for(i = 0; i < capacity; i++) {
+		//NOTE: þetta er svolítið ruglingslegt nafn
 		u64 key_hash = d->key_hashes[index];
 		bool redefable = (hash == key_hash && redef);
 
 		assert(hash != key_hash || redef);
 
-		if(!key_hash || redefable) {
+		if(key_hash == DICT_KEY_NONE || redefable) {
 			d->key_hashes[index] = hash;
 			d->values[index] = value;
 			break;
@@ -338,15 +340,10 @@ template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, 
 	assert(i != capacity);
 }
 
-template<typename V, size_t size> void dictAdd(dict<const char *, V, size> *d, char *key, V value, bool redef = false) {
-	dictAdd(d, (const char *)key, value, redef);
-}
-
-
 template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K key) {
 	V *result = NULL;
 
-	u64 hash = dictHash(d, key);
+	u64 hash = dictHash(key);
 	size_t capacity = dictCap(d);
 	size_t index = hash % capacity;
 
@@ -369,11 +366,6 @@ template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K 
 	return result;
 }
 
-template<typename V, size_t size> V *dictGet(dict<const char *, V, size> *d, char *key) {
-	return dictGet(d, (const char *)key);
-}
-
-
 template<typename K, typename V, size_t size> V dictRemove(dict<K, V, size> *d, K key) {
 	V *result_ptr = dictGet(d, key);
 	assert(result_ptr);
@@ -384,10 +376,6 @@ template<typename K, typename V, size_t size> V dictRemove(dict<K, V, size> *d, 
 	d->values[index] = (V){0};
 
 	return result;
-}
-
-template<typename V, size_t size> V dictRemove(dict<const char *, V, size> *d, char *key) {
-	return dictRemove(d, (const char *)key);
 }
 
 #pragma GCC diagnostic pop
