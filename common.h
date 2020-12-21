@@ -57,6 +57,7 @@ typedef double f64;
 #define terabytes(value) (gigabytes(value)*1024LL)
 
 #define arrayLength(a) (sizeof(a)/sizeof(a)[0])
+#define FOR(var, array, count) for(typeof((array) + 0) var = ((array) + 0); var <= (array) + (count-1); var++)
 
 #define callocType(type, count) (type *)calloc(count, sizeof(type))
 #define callocBytes(size) calloc(size, 1)
@@ -235,9 +236,10 @@ void *bufferGrow(void *buffer, size_t increment, size_t element_size) {
 }
 
 #ifdef __cplusplus
-//virkar fyrir GCC og Clang
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wc++11-extensions"
+
+#define LISTER_FOR(ptr, lister) FOR(ptr, lister, lister.count)
 
 template <typename T, size_t N> struct lister {
 	T data[N] = {};
@@ -280,12 +282,51 @@ template <typename T, size_t N> void listerRemove(lister<T, N> *a, size_t i) {
 	a->count--;
 }
 
+//dynamic array
+template <typename T> struct dynamicLister {
+	T *data = NULL;
+	size_t count = 0;
+	size_t capacity = 0;
+
+	T &operator[](size_t i) {
+		assert(i >= 0 && i < capacity);
+		return data[i];
+	}
+};
+
+template <typename T> T *operator+(dynamicLister<T> &a, size_t i) {
+	assert(i >= 0 && i < a.capacity);
+	return a.data + i;
+}
+
+template <typename T> T *operator+(size_t i, dynamicLister<T> &a) {
+	assert(i >= 0 && i < a.capacity);
+	return a.data + i;
+}
+
+template <typename T> void dynamicListerPush(dynamicLister<T> *a, T element) {
+	if(a->count + 1 > a->capacity) {
+		size_t double_capacity = a->capacity*2;
+		size_t new_capacity = double_capacity ? double_capacity : 1;
+		a->data = (T *)realloc(a->data, new_capacity * sizeof(T));
+		a->capacity = new_capacity;
+	}
+
+	a->data[a->count] = element;
+	a->count++;
+}
+
+template <typename T> T dynamicListerPop(dynamicLister<T> *a) {
+	assert(a->count > 0);
+	return a->data[--a->count];
+}
+
 //hash table
 #define DICT_KEY_NONE 0
 #define DICT_KEY_DELETED 1
-template<typename K, typename V, size_t size> struct dict {
-	u64 key_hashes[size] = {};
-	V values[size] = {};
+template <typename K, typename V, size_t N> struct dict {//N is the expected maximum number of entries
+	u64 key_hashes[N*16/13] = {};
+	V values[N*16/13] = {};
 };
 
 #define dictCap(d) (arrayLength((d)->key_hashes))
@@ -314,20 +355,34 @@ u64 dictHash(char *key) {
 	return result;
 }
 
-template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, K key, V value, bool redef = false) {
+template <typename K, typename V, size_t N> void dictAdd(dict<K, V, N> *d, K key, V value) {
 	u64 hash = dictHash(key);
 	size_t capacity = dictCap(d);
-	size_t index = hash % capacity;
+	size_t start_index = hash % capacity;
 
-	size_t i;
-	for(i = 0; i < capacity; i++) {
-		//NOTE: þetta er svolítið ruglingslegt nafn
-		u64 key_hash = d->key_hashes[index];
-		bool redefable = (hash == key_hash && redef);
+	size_t index = start_index;
+	size_t counter;
+	size_t delete_index = 0;
+	bool deleted_seen = false;
 
-		assert(hash != key_hash || redef);
+	for(counter = 0; counter < capacity; counter++) {
+		u64 stored_hash = d->key_hashes[index];
+		assert(hash != stored_hash);
 
-		if(key_hash == DICT_KEY_NONE || redefable) {
+		if(stored_hash == DICT_KEY_DELETED || deleted_seen) {
+			if(deleted_seen == false) {
+				delete_index = index;
+				deleted_seen = true;
+			}
+
+			if(stored_hash % capacity != start_index) {
+				d->key_hashes[delete_index] = hash;
+				d->values[delete_index] = value;
+				break;
+			}
+		}
+
+		if(stored_hash == DICT_KEY_NONE) {
 			d->key_hashes[index] = hash;
 			d->values[index] = value;
 			break;
@@ -337,10 +392,10 @@ template<typename K, typename V, size_t size> void dictAdd(dict<K, V, size> *d, 
 		if(index == capacity) index = 0;
 	}
 
-	assert(i != capacity);
+	assert(counter != capacity);
 }
 
-template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K key) {
+template <typename K, typename V, size_t N> V *dictGet(dict<K, V, N> *d, K key) {
 	V *result = NULL;
 
 	u64 hash = dictHash(key);
@@ -366,7 +421,7 @@ template<typename K, typename V, size_t size> V *dictGet(dict<K, V, size> *d, K 
 	return result;
 }
 
-template<typename K, typename V, size_t size> V dictRemove(dict<K, V, size> *d, K key) {
+template <typename K, typename V, size_t N> V dictRemove(dict<K, V, N> *d, K key) {
 	V *result_ptr = dictGet(d, key);
 	assert(result_ptr);
 	V result = *result_ptr;
