@@ -323,10 +323,10 @@ template <typename T> T dynamicListerPop(dynamicLister<T> *a) {
 
 //hash table
 #define DICT_KEY_NONE 0
-#define DICT_KEY_DELETED 1
 template <typename K, typename V, size_t N> struct dict {//N is the expected maximum number of entries
 	u64 key_hashes[N*16/13] = {};
 	V values[N*16/13] = {};
+	size_t count = 0;
 };
 
 #define dictCap(d) (arrayLength((d)->key_hashes))
@@ -336,9 +336,7 @@ template <typename K> u64 dictHash(K key) {
 
 	result = sdbmHashBytes(&key, sizeof(key));
 
-	if(result <= DICT_KEY_DELETED) {
-		result = DICT_KEY_DELETED + result + 1;
-	}
+	if(result == DICT_KEY_NONE) result++;
 
 	return result;
 }
@@ -348,9 +346,7 @@ u64 dictHash(char *key) {
 
 	result = sdbmHashStr((const char *)key);
 
-	if(result <= DICT_KEY_DELETED) {
-		result = DICT_KEY_DELETED + result + 1;
-	}
+	if(result == DICT_KEY_NONE) result++;
 
 	return result;
 }
@@ -361,30 +357,16 @@ template <typename K, typename V, size_t N> void dictAdd(dict<K, V, N> *d, K key
 	size_t start_index = hash % capacity;
 
 	size_t index = start_index;
-	size_t counter;
-	size_t delete_index = 0;
-	bool deleted_seen = false;
+	size_t counter = 0;
 
-	for(counter = 0; counter < capacity; counter++) {
+	for(; counter < capacity; counter++) {
 		u64 stored_hash = d->key_hashes[index];
 		assert(hash != stored_hash);
-
-		if(stored_hash == DICT_KEY_DELETED || deleted_seen) {
-			if(deleted_seen == false) {
-				delete_index = index;
-				deleted_seen = true;
-			}
-
-			if(stored_hash % capacity != start_index) {
-				d->key_hashes[delete_index] = hash;
-				d->values[delete_index] = value;
-				break;
-			}
-		}
 
 		if(stored_hash == DICT_KEY_NONE) {
 			d->key_hashes[index] = hash;
 			d->values[index] = value;
+			d->count++;
 			break;
 		}
 
@@ -421,16 +403,42 @@ template <typename K, typename V, size_t N> V *dictGet(dict<K, V, N> *d, K key) 
 	return result;
 }
 
-template <typename K, typename V, size_t N> V dictRemove(dict<K, V, N> *d, K key) {
-	V *result_ptr = dictGet(d, key);
-	assert(result_ptr);
-	V result = *result_ptr;
+template <typename K, typename V, size_t N> bool dictRemove(dict<K, V, N> *d, K key) {
+	u64 hash = dictHash(key);
+	size_t capacity = dictCap(d);
+	size_t delete_index = hash % capacity;
 
-	size_t index = (size_t)(result_ptr - d->values);
-	d->key_hashes[index] = DICT_KEY_DELETED;
-	d->values[index] = (V){0};
+	u64 counter = 0;
 
-	return result;
+	for(; counter < capacity; counter++) {
+		if(d->key_hashes[delete_index] == DICT_KEY_NONE) return false;
+		if(d->key_hashes[delete_index] == hash) break;
+		delete_index++;
+		if(delete_index == capacity) delete_index = 0;
+	}
+
+	if(d->key_hashes[delete_index] != hash) return false;
+
+	size_t index = delete_index;
+	for(; counter < capacity; counter++) {
+		index++;
+		if(index == capacity) index = 0;
+		if(d->key_hashes[index] == DICT_KEY_NONE) break;
+
+		size_t natural_index = d->key_hashes[index] % capacity;
+
+		if((index > delete_index && (natural_index <= delete_index || natural_index > index)) 
+		|| (index < delete_index && (natural_index <= delete_index && natural_index > index))) {
+			d->key_hashes[delete_index] = d->key_hashes[index];
+			d->values[delete_index] = d->values[index];
+
+			delete_index = index;
+		}
+	}
+
+	d->key_hashes[delete_index] = DICT_KEY_NONE;
+	d->count--;
+	return true;
 }
 
 #pragma GCC diagnostic pop
